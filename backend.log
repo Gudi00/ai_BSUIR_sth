@@ -7,3 +7,20 @@ INFO:     127.0.0.1:51660 - "POST /compare HTTP/1.1" 200 OK
 INFO:     127.0.0.1:52906 - "POST /compare HTTP/1.1" 200 OK
 INFO:     127.0.0.1:39590 - "POST /compare HTTP/1.1" 200 OK
 INFO:     127.0.0.1:40640 - "POST /compare HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58440 - "POST /compare HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44064 - "OPTIONS /export/docx HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44064 - "POST /export/docx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:53846 - "POST /compare HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "POST /export/docx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "OPTIONS /export/pdf HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "POST /export/pdf HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /compare HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "POST /export/pdf HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /export/pdf HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /export/docx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /export/pdf HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "OPTIONS /export/docx HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "POST /export/docx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /compare HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48648 - "POST /export/docx HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:48648 - "POST /export/pdf HTTP/1.1" 404 Not Found
