@@ -2,8 +2,9 @@ import re
 from typing import Optional, Tuple
 from ..models.block import ComparisonResult
 
+from .vector_store import vector_service
+
 class RiskEngine:
-    # Ключевые слова для модальности
     MODAL_WORDS = {
         "обязан", "должен", "вправе", "может", 
         "необходимо", "следует", "допускается", "запрещается"
@@ -12,6 +13,12 @@ class RiskEngine:
     def analyze(self, comparison: ComparisonResult) -> ComparisonResult:
         if comparison.diff_type in ["added", "deleted"]:
             comparison.risk_level = "red"
+            # Для новых блоков тоже ищем контекст: не противоречит ли новый пункт закону?
+            if comparison.new_block:
+                comparison.legal_context = vector_service.search_contradictions(
+                    comparison.new_block.clean_text, 
+                    comparison.new_block.hierarchy_level
+                )
             return comparison
 
         if comparison.diff_type == "equal":
@@ -20,23 +27,26 @@ class RiskEngine:
         old_text = comparison.old_block.clean_text.lower()
         new_text = comparison.new_block.clean_text.lower()
 
-        # 1. Игнорирование дат в шапке (позиция < 5 и нет номера пункта)
-        is_header = comparison.new_block.position < 5 and not comparison.new_block.number
-        if is_header:
-            # Проверяем, изменились ли только даты (напр. 12.03.2024 -> 19.03.2026)
-            date_pattern = r'\d{2}\.\d{2}\.\d{4}'
-            old_dates = set(re.findall(date_pattern, old_text))
-            new_dates = set(re.findall(date_pattern, new_text))
+        # 1. Поиск противоречий через Векторный Поиск по уровням иерархии
+        best_matches_per_level = vector_service.get_best_matches_per_level(
+            new_text, 
+            comparison.new_block.hierarchy_level,
+            threshold=0.55 # Порог схожести
+        )
+        
+        # Превращаем словарь в список для фронтенда
+        comparison.legal_context = [
+            {"level": level, **match} for level, match in best_matches_per_level.items()
+        ]
+        
+        if any(m["similarity"] > 0.85 for m in comparison.legal_context):
+            # Если есть ОЧЕНЬ сильное семантическое совпадение с законом, но текст не идентичен - это риск
+            comparison.risk_level = "red"
+            top_m = max(comparison.legal_context, key=lambda x: x["similarity"])
+            comparison.risk_explanation = f"🔥 Сходство с законом {top_m['level']} уровня: {top_m['law']}. Проверьте пункт {top_m['article']}."
+            return comparison
 
-            if old_dates != new_dates:
-                # Убираем даты и проверяем, осталось ли что-то еще
-                old_no_dates = re.sub(date_pattern, '', old_text).strip()
-                new_no_dates = re.sub(date_pattern, '', new_text).strip()
-                if old_no_dates == new_no_dates:
-                    comparison.risk_level = "green"
-                    comparison.risk_explanation = "Изменение даты документа в шапке (метаданные)"
-                    return comparison
-
+        # ... (остальная логика из предыдущих этапов: шапка, числа, модальность)
         # 2. Умный анализ чисел (Сроки и Суммы)
         old_nums = [int(n) for n in re.findall(r'\d+', old_text)]
         new_nums = [int(n) for n in re.findall(r'\d+', new_text)]

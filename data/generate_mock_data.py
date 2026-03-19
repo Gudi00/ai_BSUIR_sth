@@ -6,32 +6,18 @@ def create_mock_docs():
     
     # 1. СТАРАЯ РЕДАКЦИЯ
     doc_old = Document()
-    doc_old.add_heading('Договор оказания услуг (Старая редакция)', 0)
-    
-    doc_old.add_paragraph('1.1. Исполнитель обязан оказать услуги в течение 10 дней.')
-    doc_old.add_paragraph('1.2. Заказчик обязуется выплатить 5000 рублей.')
-    doc_old.add_paragraph('1.3. Стороны несут ответственность за нарушение обязательств.')
-    doc_old.add_paragraph('1.4. Изменение условий допускается по соглашению сторон.')
-    
-    doc_old.save('data/samples/old_doc.docx')
+    doc_old.add_heading('Приказ о порядке выплат (Старая редакция)', 0)
+    doc_old.add_paragraph('1.1. Выплата заработной платы производится один раз в месяц.')
+    doc_old.save('data/samples/old_doc_rag.docx')
     
     # 2. НОВАЯ РЕДАКЦИЯ
     doc_new = Document()
-    doc_new.add_heading('Договор оказания услуг (Новая редакция)', 0)
+    doc_new.add_heading('Приказ о порядке выплат (Новая редакция)', 0)
+    # Этот пункт будет семантически близок к ТК Ст. 73, но противоречить ему
+    doc_new.add_paragraph('1.1. Выплата заработной платы производится только один раз в месяц (30 числа).')
+    doc_new.save('data/samples/new_doc_rag.docx')
     
-    # Изменен срок (RED)
-    doc_new.add_paragraph('1.1. Исполнитель обязан оказать услуги в течение 15 дней.')
-    # Изменена сумма (RED)
-    doc_new.add_paragraph('1.2. Заказчик обязуется выплатить 7000 рублей.')
-    # Добавлена частица "НЕ" (RED - ОПАСНО!)
-    doc_new.add_paragraph('1.3. Стороны НЕ несут ответственность за нарушение обязательств.')
-    # Смена модальности (RED)
-    doc_new.add_paragraph('1.4. Изменение условий ЗАПРЕЩАЕТСЯ без письменного согласия.')
-    # Новый пункт (ADDED)
-    doc_new.add_paragraph('1.5. Новый пункт про конфиденциальность.')
-    
-    doc_new.save('data/samples/new_doc.docx')
-    print("Примеры документов созданы в data/samples/")
+    print("Примеры для RAG-теста созданы в data/samples/old_doc_rag.docx и new_doc_rag.docx")
 
 if __name__ == "__main__":
     create_mock_docs()

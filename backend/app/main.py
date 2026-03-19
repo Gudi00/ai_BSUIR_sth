@@ -1,16 +1,18 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 import shutil
 import os
 import uuid
-from typing import List
+import glob
+from typing import List, Dict, Any
 
 from .services.parsers import get_parser
 from .services.preprocess import preprocessor
 from .services.alignment import aligner
 from .services.risk import risk_engine
 from .services.reports import generate_docx_report, generate_pdf_report
+from .services.vector_store import vector_service
 from .models.block import ComparisonResult
 
 app = FastAPI(title="LegalDocComparer API")
@@ -24,13 +26,72 @@ app.add_middleware(
 )
 
 UPLOAD_DIR = "data/uploads"
-REPORTS_DIR = "data/reports"
+NTPA_DIR = "data/NTPA"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(REPORTS_DIR, exist_ok=True)
+for i in range(1, 11):
+    os.makedirs(os.path.join(NTPA_DIR, str(i)), exist_ok=True)
 
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
+
+# --- Управление Иерархией (NTPA) ---
+
+@app.get("/hierarchy")
+async def get_hierarchy():
+    """Список всех файлов по уровням из папок в реальном времени."""
+    structure = {}
+    disabled = vector_service.disabled_files
+    for level in range(1, 11):
+        level_path = os.path.join(NTPA_DIR, str(level))
+        os.makedirs(level_path, exist_ok=True)
+        # Сканируем папку на наличие документов
+        files = []
+        pattern = os.path.join(level_path, "*.*")
+        for f in glob.glob(pattern):
+            fname = os.path.basename(f)
+            # Игнорируем скрытые системные файлы
+            if fname.startswith("."): continue
+            files.append({
+                "name": fname,
+                "enabled": fname not in disabled
+            })
+        structure[level] = files
+    return structure
+
+@app.post("/hierarchy/toggle")
+async def toggle_hierarchy_file(filename: str = Body(..., embed=True)):
+    vector_service.toggle_file(filename)
+    return {"status": "success", "disabled_list": vector_service.disabled_files}
+
+@app.post("/hierarchy/{level}/upload")
+async def upload_to_hierarchy(level: int, file: UploadFile = File(...)):
+    if not (1 <= level <= 10):
+        raise HTTPException(status_code=400, detail="Level must be between 1 and 10")
+    
+    file_path = os.path.join(NTPA_DIR, str(level), file.filename)
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    return {"status": "success", "filename": file.filename}
+
+@app.delete("/hierarchy/{level}/{filename}")
+async def delete_from_hierarchy(level: int, filename: str):
+    file_path = os.path.join(NTPA_DIR, str(level), filename)
+    if os.path.exists(file_path):
+        os.remove(file_path)
+        return {"status": "deleted"}
+    raise HTTPException(status_code=404, detail="File not found")
+
+@app.post("/hierarchy/reindex")
+async def reindex_hierarchy():
+    """Запуск переиндексации векторной базы."""
+    try:
+        vector_service.reindex_all()
+        return {"status": "success", "indexed_blocks": len(vector_service.kb_metadata)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Сравнение документов ---
 
 @app.post("/compare", response_model=List[ComparisonResult])
 async def compare_documents(
@@ -55,50 +116,51 @@ async def compare_documents(
         old_blocks = old_parser.parse(old_path)
         new_blocks = new_parser.parse(new_path)
         
+        print(f"DEBUG: Parsed {len(old_blocks)} old blocks and {len(new_blocks)} new blocks")
+        
         for b in old_blocks:
             b.lemma_text = preprocessor.lemmatize(b.clean_text)
+            b.hierarchy_level = 10 # По умолчанию локальный акт
         for b in new_blocks:
             b.lemma_text = preprocessor.lemmatize(b.clean_text)
+            b.hierarchy_level = 10 # По умолчанию локальный акт
             
         alignment_results = aligner.align(old_blocks, new_blocks)
+        print(f"DEBUG: Aligned into {len(alignment_results)} result rows")
         
         final_results = []
         for res in alignment_results:
-            # СТРОГАЯ ПРОВЕРКА: Если оба блока существуют и тексты идентичны (после очистки) - ИГНОРИРУЕМ
+            # 1. Если это добавление или удаление - всегда оставляем
+            if res.diff_type in ["added", "deleted"]:
+                final_results.append(risk_engine.analyze(res))
+                continue
+                
+            # 2. СТРОГАЯ ПРОВЕРКА: Если тексты идентичны - игнорируем
             if res.old_block and res.new_block:
                 t1 = res.old_block.clean_text.strip()
                 t2 = res.new_block.clean_text.strip()
                 if t1 == t2:
                     continue
             
-            # Дополнительная проверка на высокий скор (почти идентичны)
-            if res.diff_type == "equal" or res.score > 99.8:
-                continue
-                
+            # 3. Если есть отличия - анализируем риски
             analyzed = risk_engine.analyze(res)
             final_results.append(analyzed)
             
+        print(f"DEBUG: Returning {len(final_results)} changes to frontend")
         return final_results
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# (Эндпоинты DOCX/PDF как раньше...)
 @app.post("/export/docx")
 async def export_docx(results: List[ComparisonResult]):
-    try:
-        file_id = str(uuid.uuid4())
-        report_path = os.path.join(REPORTS_DIR, f"report_{file_id}.docx")
-        generate_docx_report(results, report_path)
-        return FileResponse(report_path, filename="Comparison_Report.docx")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    file_id = str(uuid.uuid4()); path = os.path.join("data/reports", f"report_{file_id}.docx")
+    generate_docx_report(results, path); return FileResponse(path, filename="Report.docx")
 
 @app.post("/export/pdf")
 async def export_pdf(results: List[ComparisonResult]):
-    try:
-        file_id = str(uuid.uuid4())
-        report_path = os.path.join(REPORTS_DIR, f"report_{file_id}.pdf")
-        generate_pdf_report(results, report_path)
-        return FileResponse(report_path, filename="Comparison_Report.pdf")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    file_id = str(uuid.uuid4()); path = os.path.join("data/reports", f"report_{file_id}.pdf")
+    generate_pdf_report(results, path); return FileResponse(path, filename="Report.pdf")
