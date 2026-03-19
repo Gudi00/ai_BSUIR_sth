@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-docx
+pdfplumber
+natasha
+razdel
+pymorphy3
+rapidfuzz
+sentence-transformers
+scikit-learn
+sqlalchemy
+python-multipart
+pydantic-settings
