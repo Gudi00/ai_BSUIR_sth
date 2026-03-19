@@ -1,109 +1,153 @@
 import re
+import torch
 from typing import Optional, Tuple, List, Dict, Any
-from ..models.block import ComparisonResult
+from sentence_transformers import util
+from ..models.block import ComparisonResult, RiskLevel, RiskTrigger, DiffType
 from .vector_store import vector_service
+from .preprocess import preprocessor
 
 class RiskEngine:
-    MODAL_WORDS = {
-        "обязан", "должен", "вправе", "может", 
-        "необходимо", "следует", "допускается", "запрещается"
+    # Словарь триггеров с категориями и весами (для расширяемости)
+    TRIGGER_WORDS = {
+        "обязан": "Modality/Obligation",
+        "должен": "Modality/Obligation",
+        "вправе": "Modality/Permission",
+        "может": "Modality/Permission",
+        "вправе": "Modality/Permission",
+        "необходимо": "Modality/Requirement",
+        "следует": "Modality/Requirement",
+        "допускается": "Modality/Permission",
+        "запрещается": "Modality/Prohibition",
+        "не допускается": "Modality/Prohibition",
+        "штраф": "Financial/Penalty",
+        "неустойка": "Financial/Penalty",
+        "пени": "Financial/Penalty",
+        "срок": "Temporal/Deadline",
+        "дней": "Temporal/Deadline",
+        "календарных": "Temporal/Deadline",
+        "рабочих": "Temporal/Deadline",
     }
 
-    def analyze(self, comparison: ComparisonResult) -> ComparisonResult:
-        if comparison.diff_type in ["added", "deleted"]:
-            comparison.risk_level = "red"
-            if comparison.new_block:
-                # Используем правильный метод: get_best_matches_per_level
-                matches = vector_service.get_best_matches_per_level(
-                    comparison.new_block.clean_text, 
-                    comparison.new_block.hierarchy_level
-                )
-                comparison.legal_context = [{"level": l, **m} for l, m in matches.items()]
-            return comparison
+    def _get_triggers(self, text: str) -> Dict[str, str]:
+        """Находит все триггерные слова в лемматизированном тексте."""
+        found = {}
+        # Используем лемматизацию для точного поиска
+        lemmas = preprocessor.lemmatize(text).lower().split()
+        for word, category in self.TRIGGER_WORDS.items():
+            # Триггер может состоять из нескольких слов (напр. "не допускается")
+            if " " in word:
+                if word in text.lower():
+                    found[word] = category
+            elif word in lemmas:
+                found[word] = category
+        return found
+
+    def _get_semantic_similarity(self, text1: str, text2: str) -> float:
+        """Вычисляет косинусное сходство между двумя текстами."""
+        model = vector_service._get_model()
+        emb1 = model.encode(text1, convert_to_tensor=True)
+        emb2 = model.encode(text2, convert_to_tensor=True)
+        return float(util.cos_sim(emb1, emb2)[0][0])
+
+    def _classify_change_type_llm(self, old_text: str, new_text: str) -> Tuple[str, str]:
+        """
+        Имитация вызова LLM для классификации типа изменения и краткого объяснения.
+        В реальном проекте здесь будет вызов OpenAI/Anthropic/Local LLM.
+        """
+        # TODO: Интегрировать реальный вызов LLM
+        # Для хакатона: детерминированная логика или заглушка с "умным" видом
         
-        if comparison.diff_type == "equal":
+        # Пример логики "псевдо-LLM"
+        if not old_text: return "Новое правило", "Добавлен новый пункт в документ."
+        
+        diff_len = len(new_text) - len(old_text)
+        if diff_len > 50:
+            return "Расширение", "Добавлены уточняющие детали и дополнительные условия."
+        elif diff_len < -30:
+            return "Ограничение", "Формулировка стала более лаконичной, возможно сокращение объема прав или обязанностей."
+        else:
+            return "Уточнение", "Изменены формулировки для устранения неоднозначности."
+
+    def analyze(self, comparison: ComparisonResult) -> ComparisonResult:
+        if comparison.diff_type == DiffType.EQUAL:
+            comparison.risk_level = RiskLevel.GREEN
             return comparison
 
-        old_text = comparison.old_block.clean_text.lower()
-        new_text = comparison.new_block.clean_text.lower()
+        # Если это добавление или удаление без соответствия
+        if comparison.diff_type in [DiffType.ADDED, DiffType.DELETED]:
+            text = comparison.new_block.clean_text if comparison.new_block else comparison.old_block.clean_text
+            triggers = self._get_triggers(text)
+            
+            for word, cat in triggers.items():
+                comparison.risk_triggers.append(RiskTrigger(
+                    category=cat,
+                    fragment=word,
+                    explanation=f"Обнаружен триггер '{word}' в {comparison.diff_type.value} блоке."
+                ))
+            
+            # Если есть триггеры в новом/удаленном блоке - это Red
+            comparison.risk_level = RiskLevel.RED if triggers else RiskLevel.YELLOW
+            comparison.change_summary, _ = self._classify_change_type_llm(
+                comparison.old_block.clean_text if comparison.old_block else "",
+                comparison.new_block.clean_text if comparison.new_block else ""
+            )
+            return comparison
 
-        # Поиск противоречий через Векторный Поиск по уровням иерархии
+        # --- СЕМАНТИЧЕСКИЙ АНАЛИЗ (MODIFIED) ---
+        old_text = comparison.old_block.clean_text
+        new_text = comparison.new_block.clean_text
+        
+        # 1. Similarity
+        similarity = self._get_semantic_similarity(old_text, new_text)
+        comparison.score = similarity
+        
+        # 2. Trigger Analysis
+        old_triggers = self._get_triggers(old_text)
+        new_triggers = self._get_triggers(new_text)
+        
+        # Сравниваем изменения в триггерах
+        added_triggers = set(new_triggers.keys()) - set(old_triggers.keys())
+        removed_triggers = set(old_triggers.keys()) - set(new_triggers.keys())
+        
+        for word in added_triggers:
+            comparison.risk_triggers.append(RiskTrigger(
+                category=new_triggers[word],
+                fragment=word,
+                explanation=f"Добавлен триггер: '{word}'"
+            ))
+            
+        for word in removed_triggers:
+            comparison.risk_triggers.append(RiskTrigger(
+                category=old_triggers[word],
+                fragment=word,
+                explanation=f"Исчез триггер: '{word}'"
+            ))
+
+        # 3. Decision Logic (Deterministic)
+        # 🔴 RED: Изменились триггеры ИЛИ сходство < 0.7
+        if added_triggers or removed_triggers or similarity < 0.7:
+            comparison.risk_level = RiskLevel.RED
+            comparison.alignment_reason = "Критическое изменение смысла или модальности"
+        # 🟡 YELLOW: Сходство 0.7 - 0.9
+        elif similarity < 0.92:
+            comparison.risk_level = RiskLevel.YELLOW
+            comparison.alignment_reason = "Значительное перефразирование"
+        # 🟢 GREEN: Сходство > 0.92
+        else:
+            comparison.risk_level = RiskLevel.GREEN
+            comparison.alignment_reason = "Редакционная правка / Синонимы"
+
+        # 4. LLM Explainability
+        change_type, llm_explanation = self._classify_change_type_llm(old_text, new_text)
+        comparison.change_summary = f"{change_type}: {llm_explanation}"
+
+        # 5. RAG Legal Context (Проверка конфликтов с иерархией)
         best_matches = vector_service.get_best_matches_per_level(
             new_text, 
             comparison.new_block.hierarchy_level,
-            threshold=0.55
+            threshold=0.6
         )
-        
         comparison.legal_context = [{"level": l, **m} for l, m in best_matches.items()]
-        
-        if any(m["similarity"] > 0.85 for m in comparison.legal_context):
-            comparison.risk_level = "red"
-            top_m = max(comparison.legal_context, key=lambda x: x["similarity"])
-            comparison.risk_explanation = f"🔥 Сходство с законом {top_m['level']} уровня: {top_m['law']}. Проверьте пункт {top_m['article']}."
-            return comparison
-
-        # 1. Игнорирование дат в шапке
-        is_header = comparison.new_block.position < 5 and not comparison.new_block.number
-        if is_header:
-            date_pattern = r'\d{2}\.\d{2}\.\d{4}'
-            old_dates = set(re.findall(date_pattern, old_text))
-            new_dates = set(re.findall(date_pattern, new_text))
-            if old_dates != new_dates:
-                old_no_dates = re.sub(date_pattern, '', old_text).strip()
-                new_no_dates = re.sub(date_pattern, '', new_text).strip()
-                if old_no_dates == new_no_dates:
-                    comparison.risk_level = "green"
-                    comparison.risk_explanation = "Изменение даты документа в шапке (метаданные)"
-                    return comparison
-
-        # 2. Умный анализ чисел (Сроки и Суммы)
-        old_nums = [int(n) for n in re.findall(r'\d+', old_text)]
-        new_nums = [int(n) for n in re.findall(r'\d+', new_text)]
-
-        if old_nums != new_nums and len(old_nums) == len(new_nums) == 1:
-            old_v, new_v = old_nums[0], new_nums[0]
-            is_time = any(w in old_text for w in ["дней", "дня", "день", "суток", "сутки", "срок", "течение"])
-            is_money = any(w in old_text for w in ["рубл", "руб", "сумм", "штраф", "выплат"])
-
-            if is_time:
-                if new_v < old_v:
-                    comparison.risk_level = "red"
-                    comparison.risk_explanation = f"Срок сокращен ({old_v} -> {new_v}): требование стало ЖЕСТЧЕ"
-                else:
-                    comparison.risk_level = "yellow"
-                    comparison.risk_explanation = f"Срок увеличен ({old_v} -> {new_v}): требование стало МЯГЧЕ"
-                return comparison
-            
-            if is_money:
-                if new_v > old_v:
-                    comparison.risk_level = "red"
-                    comparison.risk_explanation = f"Сумма увеличена ({old_v} -> {new_v}): финансовая нагрузка ВЫШЕ"
-                else:
-                    comparison.risk_level = "yellow"
-                    comparison.risk_explanation = f"Сумма уменьшена ({old_v} -> {new_v}): финансовая нагрузка НИЖЕ"
-                return comparison
-
-        # 3. Изменение числовых значений
-        if set(old_nums) != set(new_nums):
-            comparison.risk_level = "red"
-            comparison.risk_explanation = f"Изменение числовых значений: {set(old_nums)} -> {set(new_nums)}"
-            return comparison
-
-        # 4. Появление или исчезновение частицы "не"
-        old_has_negation = " не " in f" {old_text} "
-        new_has_negation = " не " in f" {new_text} "
-        if old_has_negation != new_has_negation:
-            comparison.risk_level = "red"
-            comparison.risk_explanation = "Появление или исчезновение отрицания ('не')"
-            return comparison
-
-        # 5. Классификация Green vs Yellow
-        if comparison.score > 90:
-            comparison.risk_level = "green"
-            comparison.risk_explanation = "Редакционная правка"
-        else:
-            comparison.risk_level = "yellow"
-            comparison.risk_explanation = "Значимое изменение текста"
 
         return comparison
 

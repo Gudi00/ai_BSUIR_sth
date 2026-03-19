@@ -92,11 +92,17 @@ async def reindex_hierarchy():
 
 # --- Сравнение документов ---
 
-@app.post("/compare", response_model=List[ComparisonResult])
+from .services.ui_logic import ui_service
+from .models.block import ComparisonResult, ComparisonResponse, RiskLevel
+
+# ... (Existing imports ...)
+
+@app.post("/compare", response_model=ComparisonResponse)
 async def compare_documents(
     old_file: UploadFile = File(...),
     new_file: UploadFile = File(...)
 ):
+    # ... (Keep parsing and alignment logic unchanged ...)
     old_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{old_file.filename}")
     new_path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4()}_{new_file.filename}")
     
@@ -115,45 +121,49 @@ async def compare_documents(
         old_blocks = old_parser.parse(old_path)
         new_blocks = new_parser.parse(new_path)
         
-        print(f"DEBUG: Parsed {len(old_blocks)} old blocks and {len(new_blocks)} new blocks")
-        
         for b in old_blocks:
-            if b.clean_text and b.clean_text.strip():
-                b.lemma_text = preprocessor.lemmatize(b.clean_text)
-            else:
-                b.lemma_text = ""
+            b.lemma_text = preprocessor.lemmatize(b.clean_text) if b.clean_text else ""
             b.hierarchy_level = 10
             
         for b in new_blocks:
-            if b.clean_text and b.clean_text.strip():
-                b.lemma_text = preprocessor.lemmatize(b.clean_text)
-            else:
-                b.lemma_text = ""
+            b.lemma_text = preprocessor.lemmatize(b.clean_text) if b.clean_text else ""
             b.hierarchy_level = 10
             
         alignment_results = aligner.align(old_blocks, new_blocks)
-        print(f"DEBUG: Aligned into {len(alignment_results)} result rows")
         
-        final_results = []
+        raw_final_results = []
         for res in alignment_results:
-            # 1. Если это добавление или удаление - всегда оставляем
             if res.diff_type in ["added", "deleted"]:
-                final_results.append(risk_engine.analyze(res))
+                raw_final_results.append(risk_engine.analyze(res))
                 continue
                 
-            # 2. СТРОГАЯ ПРОВЕРКА: Если тексты идентичны - игнорируем
             if res.old_block and res.new_block:
-                t1 = res.old_block.clean_text.strip()
-                t2 = res.new_block.clean_text.strip()
-                if t1 == t2:
+                if res.old_block.clean_text.strip() == res.new_block.clean_text.strip():
                     continue
             
-            # 3. Если есть отличия - анализируем риски
-            analyzed = risk_engine.analyze(res)
-            final_results.append(analyzed)
+            raw_final_results.append(risk_engine.analyze(res))
             
-        print(f"DEBUG: Returning {len(final_results)} changes to frontend")
-        return final_results
+        # 1. Считаем статистику по "сырым" результатам
+        summary = {
+            "total_blocks": len(new_blocks),
+            "matched": sum(1 for r in raw_final_results if r.old_block and r.new_block),
+            "changed": sum(1 for r in raw_final_results if r.diff_type == "changed"),
+            "added": sum(1 for r in raw_final_results if r.diff_type == "added"),
+            "deleted": sum(1 for r in raw_final_results if r.diff_type == "deleted"),
+            "risk_distribution": {
+                "red": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.RED),
+                "yellow": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.YELLOW),
+                "green": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.GREEN),
+            }
+        }
+        
+        # 2. Применяем Smart Collapse (только для UI)
+        collapsed_results = ui_service.collapse_long_added_tails(raw_final_results, min_blocks=3)
+        
+        return {
+            "summary": summary,
+            "results": collapsed_results
+        }
 
     except Exception as e:
         import traceback
