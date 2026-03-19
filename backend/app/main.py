@@ -45,13 +45,12 @@ async def get_hierarchy():
     for level in range(1, 11):
         level_path = os.path.join(NTPA_DIR, str(level))
         os.makedirs(level_path, exist_ok=True)
-        # Сканируем папку на наличие документов
         files = []
-        pattern = os.path.join(level_path, "*.*")
-        for f in glob.glob(pattern):
-            fname = os.path.basename(f)
-            # Игнорируем скрытые системные файлы
-            if fname.startswith("."): continue
+        # Прямое сканирование директории
+        for fname in os.listdir(level_path):
+            f_path = os.path.join(level_path, fname)
+            if fname.startswith(".") or os.path.isdir(f_path):
+                continue
             files.append({
                 "name": fname,
                 "enabled": fname not in disabled
