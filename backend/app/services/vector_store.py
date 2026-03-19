@@ -77,15 +77,20 @@ class VectorSearchService:
                 filename = os.path.basename(file_path)
                 if filename in self.disabled_files: continue
                 
+                # Генерируем уникальный короткий ID для кэша на основе имени и контента
                 file_hash = self._get_file_hash(file_path)
-                cache_path = os.path.join(self.cache_dir, f"{filename}_{file_hash}.pkl")
+                name_hash = hashlib.md5(filename.encode()).hexdigest()
+                cache_path = os.path.join(self.cache_dir, f"{name_hash}_{file_hash}.pkl")
                 
                 if os.path.exists(cache_path):
-                    with open(cache_path, 'rb') as f:
-                        cached = pickle.load(f)
-                        all_vectors.extend(cached['vectors'])
-                        all_metadata.extend(cached['metadata'])
-                    continue
+                    try:
+                        with open(cache_path, 'rb') as f:
+                            cached = pickle.load(f)
+                            all_vectors.extend(cached['vectors'])
+                            all_metadata.extend(cached['metadata'])
+                        continue
+                    except:
+                        pass # Если кэш битый, переиндексируем
 
                 try:
                     parser = get_parser(filename)

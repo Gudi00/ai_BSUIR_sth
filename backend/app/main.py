@@ -119,11 +119,18 @@ async def compare_documents(
         print(f"DEBUG: Parsed {len(old_blocks)} old blocks and {len(new_blocks)} new blocks")
         
         for b in old_blocks:
-            b.lemma_text = preprocessor.lemmatize(b.clean_text)
-            b.hierarchy_level = 10 # По умолчанию локальный акт
+            if b.clean_text and b.clean_text.strip():
+                b.lemma_text = preprocessor.lemmatize(b.clean_text)
+            else:
+                b.lemma_text = ""
+            b.hierarchy_level = 10
+            
         for b in new_blocks:
-            b.lemma_text = preprocessor.lemmatize(b.clean_text)
-            b.hierarchy_level = 10 # По умолчанию локальный акт
+            if b.clean_text and b.clean_text.strip():
+                b.lemma_text = preprocessor.lemmatize(b.clean_text)
+            else:
+                b.lemma_text = ""
+            b.hierarchy_level = 10
             
         alignment_results = aligner.align(old_blocks, new_blocks)
         print(f"DEBUG: Aligned into {len(alignment_results)} result rows")
