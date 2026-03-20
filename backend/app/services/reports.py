@@ -35,13 +35,33 @@ def generate_docx_report(results: List[ComparisonResult], output_path: str):
             row_cells = table.add_row().cells
             
             # Старый текст
-            old_val = f"{res.old_block.number + ' ' if res.old_block and res.old_block.number else ''}{res.old_block.clean_text if res.old_block else '(Блок отсутствовал)'}"
+            old_val = ""
+            if res.old_block:
+                old_val = f"{res.old_block.number + ' ' if res.old_block.number else ''}{res.old_block.clean_text}"
+            else:
+                old_val = "(Блок отсутствовал)"
             row_cells[0].text = old_val
             
-            # Новый текст
-            new_val = f"{res.new_block.number + ' ' if res.new_block and res.new_block.number else ''}{res.new_block.clean_text if res.new_block else '(Блок удален)'}"
-            if res.risk_explanation:
-                new_val += f"\n\n[АНАЛИЗ: {res.risk_explanation}]"
+            # Новый текст + Анализ
+            new_text = ""
+            if res.new_block:
+                new_text = f"{res.new_block.number + ' ' if res.new_block.number else ''}{res.new_block.clean_text}"
+            else:
+                new_text = "(Блок удален)"
+            
+            analysis_parts = []
+            if res.change_summary:
+                analysis_parts.append(f"Анализ: {res.change_summary}")
+            
+            if res.risk_triggers:
+                trigger_list = ", ".join([f"{t.category}: {t.fragment}" for t in res.risk_triggers])
+                analysis_parts.append(f"Триггеры: {trigger_list}")
+                
+            if analysis_parts:
+                new_val = f"{new_text}\n\n" + "\n".join([f"[{p}]" for p in analysis_parts])
+            else:
+                new_val = new_text
+                
             row_cells[1].text = new_val
             
             if res.risk_level in COLORS:
@@ -70,14 +90,27 @@ def generate_pdf_report(results: List[ComparisonResult], output_path: str):
         }
 
         for res in results:
-            old_t = f"{res.old_block.number + ' ' if res.old_block and res.old_block.number else ''}{res.old_block.clean_text if res.old_block else 'None'}"
-            new_t = f"{res.new_block.number + ' ' if res.new_block and res.new_block.number else ''}{res.new_block.clean_text if res.new_block else 'None'}"
+            old_t = ""
+            if res.old_block:
+                old_t = f"{res.old_block.number + ' ' if res.old_block.number else ''}{res.old_block.clean_text}"
+            else:
+                old_t = "None"
             
-            # Для PDF в MVP используем latin-only (Helvetica) или попробуем latin-1 кодировку
-            # Кириллица в PDF сложна без внешних .ttf файлов.
-            # Если вам нужна кириллица в PDF, пожалуйста, установите шрифты DejaVuSans в систему!
+            new_t = ""
+            if res.new_block:
+                new_t = f"{res.new_block.number + ' ' if res.new_block.number else ''}{res.new_block.clean_text}"
+            else:
+                new_t = "None"
+            
+            # Добавляем анализ в текст для PDF
+            if res.change_summary:
+                new_t += f" [AI: {res.change_summary}]"
+            if res.risk_triggers:
+                triggers = ", ".join([f"{t.category}: {t.fragment}" for t in res.risk_triggers])
+                new_t += f" [Triggers: {triggers}]"
             
             y_before = pdf.get_y()
+            # ... rest of PDF logic ...
             pdf.multi_cell(95, 5, old_t.encode('latin-1', 'replace').decode('latin-1'), border=1)
             y_after_old = pdf.get_y()
             
