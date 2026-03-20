@@ -51,6 +51,10 @@ class ComparisonResult(BaseModel):
     risk_triggers: List[RiskTrigger] = []
     human_comment: Optional[str] = None
     legal_context: Optional[List[Dict[str, Any]]] = None
+    
+    # New fields for 4-layer explainability and diffing
+    diff_highlight_old: Optional[str] = None # HTML/Markdown for old text highlighting
+    diff_highlight_new: Optional[str] = None # HTML/Markdown for new text highlighting
 
     class Config:
         from_attributes = True

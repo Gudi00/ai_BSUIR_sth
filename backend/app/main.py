@@ -144,15 +144,25 @@ async def compare_documents(
             raw_final_results.append(risk_engine.analyze(res))
             
         # 1. Считаем статистику по "сырым" результатам
+        red_count = sum(1 for r in raw_final_results if r.risk_level == RiskLevel.RED)
+        yellow_count = sum(1 for r in raw_final_results if r.risk_level == RiskLevel.YELLOW)
+        total_b = len(new_blocks)
+        
+        # Интегральный показатель критичности (0-1)
+        criticality = 0.0
+        if total_b > 0:
+            criticality = min(1.0, (red_count * 1.0 + yellow_count * 0.3) / (total_b * 0.5 + 1))
+
         summary = {
-            "total_blocks": len(new_blocks),
+            "total_blocks": total_b,
             "matched": sum(1 for r in raw_final_results if r.old_block and r.new_block),
             "changed": sum(1 for r in raw_final_results if r.diff_type == "changed"),
             "added": sum(1 for r in raw_final_results if r.diff_type == "added"),
             "deleted": sum(1 for r in raw_final_results if r.diff_type == "deleted"),
+            "criticality_score": criticality,
             "risk_distribution": {
-                "red": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.RED),
-                "yellow": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.YELLOW),
+                "red": red_count,
+                "yellow": yellow_count,
                 "green": sum(1 for r in raw_final_results if r.risk_level == RiskLevel.GREEN),
             }
         }

@@ -87,6 +87,15 @@ class RiskEngine:
             
             # Если есть триггеры в новом/удаленном блоке - это Red
             comparison.risk_level = RiskLevel.RED if triggers else RiskLevel.YELLOW
+            
+            # Word-level diff for single blocks
+            if comparison.diff_type == DiffType.ADDED:
+                comparison.diff_highlight_new = f"**{comparison.new_block.clean_text}**"
+                comparison.human_comment = "Добавлен новый пункт. Требуется оценка его влияния на структуру документа."
+            else:
+                comparison.diff_highlight_old = f"~~{comparison.old_block.clean_text}~~"
+                comparison.human_comment = "Пункт удален. Убедитесь, что это не нарушает логику документа."
+
             comparison.change_summary, _ = self._classify_change_type_llm(
                 comparison.old_block.clean_text if comparison.old_block else "",
                 comparison.new_block.clean_text if comparison.new_block else ""
@@ -128,20 +137,28 @@ class RiskEngine:
         if added_triggers or removed_triggers or similarity < 0.7:
             comparison.risk_level = RiskLevel.RED
             comparison.alignment_reason = "Критическое изменение смысла или модальности"
+            comparison.human_comment = "Внимание! Изменение существенно влияет на юридическую силу пункта или накладывает новые обязательства."
         # 🟡 YELLOW: Сходство 0.7 - 0.9
         elif similarity < 0.92:
             comparison.risk_level = RiskLevel.YELLOW
             comparison.alignment_reason = "Значительное перефразирование"
+            comparison.human_comment = "Текст был переформулирован. Рекомендуется проверить на наличие скрытых смысловых нюансов."
         # 🟢 GREEN: Сходство > 0.92
         else:
             comparison.risk_level = RiskLevel.GREEN
             comparison.alignment_reason = "Редакционная правка / Синонимы"
+            comparison.human_comment = "Изменения носят косметический характер и не влияют на суть документа."
 
         # 4. LLM Explainability
         change_type, llm_explanation = self._classify_change_type_llm(old_text, new_text)
         comparison.change_summary = f"{change_type}: {llm_explanation}"
 
-        # 5. RAG Legal Context (Проверка конфликтов с иерархией)
+        # 5. Word-level Diff (GitHub-style)
+        h_old, h_new = preprocessor.generate_word_diff(old_text, new_text)
+        comparison.diff_highlight_old = h_old
+        comparison.diff_highlight_new = h_new
+
+        # 6. RAG Legal Context (Проверка конфликтов с иерархией)
         best_matches = vector_service.get_best_matches_per_level(
             new_text, 
             comparison.new_block.hierarchy_level,
