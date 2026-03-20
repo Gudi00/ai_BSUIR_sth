@@ -9,5 +9,6 @@ rapidfuzz
 sentence-transformers
 scikit-learn
 sqlalchemy
+fpdf2
 python-multipart
 pydantic-settings
